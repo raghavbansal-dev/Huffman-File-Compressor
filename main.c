@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <ctype.h>
 #include <stdlib.h>
+#include <string.h>
 
 // Huffman never has more than 256 nodes in the heap at once
 #define HEAP_CAPACITY 256
@@ -25,6 +26,8 @@ Node* build_tree(unsigned long *freq);
 void print_tree(Node *node, int depth);
 unsigned long encoded_bits(Node *node, int depth);
 void free_tree(Node *node);
+void generate_codes(Node *node, char *path, int depth, char codes[256][256]);
+void print_codes(unsigned long *freq, char codes[256][256]);
 
 int main(int argc, char *argv[]) {
 	if (argc != 2) {
@@ -57,13 +60,27 @@ int main(int argc, char *argv[]) {
 	}
 
 	Node *root = build_tree(freq);
-	print_tree(root, 0);
+	
+	char codes[256][256] = {0};
+	char path[256];
 
+	if (root != NULL) {
+		if (root->leftChild == NULL) {
+			strcpy(codes[root->byte], "0");
+		} else {
+			generate_codes(root, path, 0, codes);
+		}
+	}
+
+	unsigned long compressedBits = 0;
+	for (int i = 0; i < 256; i++) {
+		compressedBits += (freq[i] * strlen(codes[i]));
+	}
 	// Rough preview of how much we'd save, before writing any actual compression
 	unsigned long bits = encoded_bits(root, 0);
 	printf("Original:   %lu bytes (%lu bits)\n", total, total * 8);
 	// +7 rounds up to the next full byte
-	printf("Compressed: %lu bits = %lu bytes (data only, no header)\n", bits, (bits + 7) / 8);
+	printf("Compressed: %lu bits = %lu bytes, %lu (data only, no header)\n", bits, (bits + 7) / 8, compressedBits);
 
 	free_tree(root);
 	return 0;
@@ -231,7 +248,7 @@ unsigned long encoded_bits(Node *node, int depth) {
 	return encoded_bits(node->leftChild, depth + 1) + encoded_bits(node->rightChild, depth + 1);
 }
 
-// Kids first, then the node. Freeing the node first would lose
+// children first, then the node. Freeing the node first would lose
 // the pointers to its children.
 void free_tree(Node *node) {
 	if (node == NULL) {
@@ -241,4 +258,33 @@ void free_tree(Node *node) {
 	free_tree(node->leftChild);
 	free_tree(node->rightChild);
 	free(node);
+}
+
+void generate_codes(Node *node, char *path, int depth, char codes[256][256]) {
+	if (node == NULL) {
+		return;
+	}
+
+	if (node->rightChild == NULL && node->leftChild == NULL) {
+		path[depth] = '\0';
+		strcpy(codes[node->byte], path);
+		return;
+	}
+	
+	path[depth] = '0';
+	generate_codes(node->leftChild, path, depth + 1, codes);
+	path[depth] = '1';
+	generate_codes(node->rightChild, path, depth + 1, codes);
+}
+
+void print_codes(unsigned long *freq, char codes[256][256]) {
+	for (int i = 0; i < 256; i++) {
+		if (freq[i] > 0) {
+			if (isprint(i)) {
+				printf("%3d '%c': freq %lu, code %s\n", i, i, freq[i], codes[i]);
+			} else {
+				printf("%3d    : freq %lu, code %s\n", i, freq[i], codes[i]);
+			}
+		}
+	}
 }
