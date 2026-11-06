@@ -17,7 +17,7 @@ Decompressed: 717602 bytes
 You need `gcc`, `make` and a Linux or macOS terminal. On Windows, use WSL.
 
 ```
-git clone https://github.com/raghavbansal-dev/huffmanFileCompressor.git
+git clone https://github.com/raghavbansal-dev/huffman-File-Compressor.git
 cd huffmanFileCompressor
 make
 ```
