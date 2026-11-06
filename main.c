@@ -2,8 +2,11 @@
 #include <ctype.h>
 #include <stdlib.h>
 
+// Huffman never has more than 256 nodes in the heap at once
 #define HEAP_CAPACITY 256
 
+// A tree node. Leaves hold an actual byte; internal nodes just hold
+// the combined frequency of everything below them.
 typedef struct Node {
 	unsigned char byte;
 	unsigned long frequency;
@@ -29,21 +32,23 @@ int main(int argc, char *argv[]) {
 		return 1;
 	}
 
+	// One counter per possible byte value
 	unsigned long freq[256] = {0};
 
+	// "rb" so nothing gets messed with on the way in, works for any file type
 	FILE *fptr = fopen(argv[1], "rb");
 	if (fptr == NULL) {
 		perror(argv[1]);
 		return 1;
 	}
 
+	// chr has to be an int, not a char, otherwise EOF (-1) gets mixed up with byte 255
 	int chr;
-
 	while ((chr = fgetc(fptr)) != EOF) {
-		// fgetc reads one byte and returns its value (0-255) as an int, or EOF (-1)
 		freq[chr]++;
 	}
 
+	// Done with the file once we have the counts
 	fclose(fptr);
 
 	unsigned long total = 0;
@@ -54,21 +59,25 @@ int main(int argc, char *argv[]) {
 	Node *root = build_tree(freq);
 	print_tree(root, 0);
 
+	// Rough preview of how much we'd save, before writing any actual compression
 	unsigned long bits = encoded_bits(root, 0);
 	printf("Original:   %lu bytes (%lu bits)\n", total, total * 8);
+	// +7 rounds up to the next full byte
 	printf("Compressed: %lu bits = %lu bytes (data only, no header)\n", bits, (bits + 7) / 8);
 
 	free_tree(root);
 	return 0;
 }
 
-// Swaps two node pointers (the nodes themselves never move in memory)
+// Swaps the pointers, not the nodes. The nodes stay put in memory,
+// which matters because parents point straight at them.
 void swap(Node **a, Node **b) {
 	Node *temp = *a;
 	*a = *b;
 	*b = temp;
 }
 
+// Keep moving a node up while it's smaller than its parent
 void sift_up(Node **arr, int index) {
 	if (index == 0) {
 		return;
@@ -83,12 +92,14 @@ void sift_up(Node **arr, int index) {
 	sift_up(arr, pIndex);
 }
 
+// Keep moving a node down, always swapping with the smaller child
+// (swapping with the bigger one would break the heap)
 void sift_down(Node **arr, int size, int index) {
 	int lIndex = 2 * index + 1;
 	int rIndex = 2 * index + 2;
 	int smallest = index;
 
-	// A child exists only if its index is < size
+	// Anything at or past size isn't part of the heap, so don't look at it
 	if (lIndex < size && arr[lIndex]->frequency < arr[smallest]->frequency) {
 		smallest = lIndex;
 	}
@@ -96,7 +107,7 @@ void sift_down(Node **arr, int size, int index) {
 		smallest = rIndex;
 	}
 
-	// Parent is already the smallest (this also covers leaves): heap is valid
+	// Already smaller than both kids (or it's a leaf), so we're done
 	if (smallest == index) {
 		return;
 	}
@@ -105,6 +116,7 @@ void sift_down(Node **arr, int size, int index) {
 	sift_down(arr, size, smallest);
 }
 
+// Drop the new node in the first free slot, then let it bubble up
 void heap_insert(Node **arr, int *size, Node *node) {
 	if (*size == HEAP_CAPACITY) {
 		fprintf(stderr, "heap_insert: heap is full\n");
@@ -115,6 +127,7 @@ void heap_insert(Node **arr, int *size, Node *node) {
 	*size += 1;
 }
 
+// Take the root (the smallest), put the last node in its place, and sink it
 Node* heap_extract_min(Node **arr, int *size) {
 	if (*size == 0) {
 		fprintf(stderr, "heap_extract_min: heap is empty\n");
@@ -129,6 +142,7 @@ Node* heap_extract_min(Node **arr, int *size) {
 	return root;
 }
 
+// Just for debugging
 void print_heap(Node **arr, int size) {
 	for (int i = 0; i < size; i++) {
 		printf("%lu ", arr[i]->frequency);
@@ -136,9 +150,11 @@ void print_heap(Node **arr, int size) {
 	printf("\n");
 }
 
+// Used for both leaves (children NULL) and internal nodes
 Node* create_node(unsigned char byte, unsigned long frequency, Node* left, Node* right) {
 	Node* node = malloc(sizeof(Node));
 	if (node == NULL) {
+		// Nothing sensible to do if we're out of memory
 		fprintf(stderr, "Out of memory\n");
 		exit(1);
 	}
@@ -152,36 +168,43 @@ Node* create_node(unsigned char byte, unsigned long frequency, Node* left, Node*
 }
 
 Node* build_tree(unsigned long *freq) {
+	// Local array is fine here, it's only 256 pointers
 	Node* heap[HEAP_CAPACITY];
 	int size = 0;
 
+	// One leaf per byte that actually shows up. Going 0-255 in order
+	// means the decompressor will build the exact same tree.
 	for (int i = 0; i < 256; i++) {
 		if (freq[i] > 0) {
 			heap_insert(heap, &size, create_node(i, freq[i], NULL, NULL));
 		}
 	}
 
+	// Empty file, no tree
 	if (size == 0) {
 		return NULL;
 	}
 
+	// The core of Huffman: keep merging the two rarest nodes until one is left
 	while (size > 1) {
 		Node* leftNode = heap_extract_min(heap, &size);
 		Node* rightNode = heap_extract_min(heap, &size);
 		heap_insert(heap, &size, create_node(0, leftNode->frequency + rightNode->frequency, leftNode, rightNode));
 	}
 
+	// Whatever's left is the root
 	Node* root = heap_extract_min(heap, &size);
 	return root;
 }
 
-// Prints every leaf with its frequency and depth (= code length in bits)
+// Prints each leaf with its depth, which is also how many bits its code will take
 void print_tree(Node *node, int depth) {
 	if (node == NULL) {
 		return;
 	}
 
-	if (node->leftChild == NULL) {   // leaf
+	// Internal nodes always have two kids, so no left child means it's a leaf
+	if (node->leftChild == NULL) {
 		if (isprint(node->byte)) {
 			printf("%3d '%c': freq %lu, depth %d\n", node->byte, node->byte, node->frequency, depth);
 		} else {
@@ -194,20 +217,22 @@ void print_tree(Node *node, int depth) {
 	print_tree(node->rightChild, depth + 1);
 }
 
-// Sum of frequency * depth over all leaves = size of the encoded data in bits
+// Each byte costs (code length) bits every time it appears,
+// so the total is just frequency * depth summed over all leaves
 unsigned long encoded_bits(Node *node, int depth) {
 	if (node == NULL) {
 		return 0;
 	}
 
-	if (node->leftChild == NULL) {   // leaf
+	if (node->leftChild == NULL) {
 		return node->frequency * depth;
 	}
 
 	return encoded_bits(node->leftChild, depth + 1) + encoded_bits(node->rightChild, depth + 1);
 }
 
-// Frees children before the node itself (post-order)
+// Kids first, then the node. Freeing the node first would lose
+// the pointers to its children.
 void free_tree(Node *node) {
 	if (node == NULL) {
 		return;
