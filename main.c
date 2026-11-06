@@ -15,6 +15,12 @@ typedef struct Node {
 	struct Node* rightChild;
 } Node;
 
+typedef struct BitWriter {
+	FILE *fp;
+	unsigned char buffer;
+	int count;
+} BitWriter;
+
 void swap(Node **a, Node **b);
 void sift_up(Node **arr, int index);
 void sift_down(Node **arr, int size, int index);
@@ -28,6 +34,9 @@ unsigned long encoded_bits(Node *node, int depth);
 void free_tree(Node *node);
 void generate_codes(Node *node, char *path, int depth, char codes[256][256]);
 void print_codes(unsigned long *freq, char codes[256][256]);
+void write_bit(BitWriter *bw, int bit);
+void flush_bits(BitWriter *bw);
+void write_code(BitWriter *bw, const char *code);
 
 int main(int argc, char *argv[]) {
 	if (argc != 2) {
@@ -286,5 +295,38 @@ void print_codes(unsigned long *freq, char codes[256][256]) {
 				printf("%3d    : freq %lu, code %s\n", i, freq[i], codes[i]);
 			}
 		}
+	}
+}
+
+void write_bit(BitWriter *bw, int bit) {
+	bw->buffer = ((bw->buffer << 1) | bit);
+	bw->count  += 1;
+	if (bw->count == 8) {
+		fputc(bw->buffer, bw->fp);
+		bw->buffer = 0;
+		bw->count = 0;
+	}
+}
+
+void flush_bits(BitWriter *bw) {
+	if (bw->count == 0) {
+		return;
+	}
+
+	bw->buffer = bw->buffer << (8 - bw->count);
+	fputc(bw->buffer, bw->fp);
+	bw->buffer = 0;
+	bw->count = 0;
+}
+
+void write_code(BitWriter *bw, const char *code) {
+	int i = 0;
+	while (code[i] != '\0') {
+		if (code[i] == '1') {
+			write_bit(bw, 1);
+		} else {
+			write_bit(bw, 0);
+		}
+		i++;
 	}
 }
