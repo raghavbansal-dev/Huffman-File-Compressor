@@ -19,6 +19,9 @@ Node* heap_extract_min(Node **arr, int *size);
 void print_heap(Node **arr, int size);
 Node* create_node(unsigned char byte, unsigned long frequency, Node* left, Node* right);
 Node* build_tree(unsigned long *freq);
+void print_tree(Node *node, int depth);
+unsigned long encoded_bits(Node *node, int depth);
+void free_tree(Node *node);
 
 int main(int argc, char *argv[]) {
 	if (argc != 2) {
@@ -41,22 +44,21 @@ int main(int argc, char *argv[]) {
 		freq[chr]++;
 	}
 
-	unsigned long total = 0;
+	fclose(fptr);
 
+	unsigned long total = 0;
 	for (int i = 0; i < 256; i++) {
-		if (freq[i] > 0) {
-			if (isprint(i)) {
-				printf("%3d '%c': %lu\n", i, i, freq[i]);
-			} else {
-				printf("%3d    : %lu\n", i, freq[i]);
-			}
-			total += freq[i];
-		}
+		total += freq[i];
 	}
 
-	printf("Total: %lu\n", total);
+	Node *root = build_tree(freq);
+	print_tree(root, 0);
 
-	fclose(fptr);
+	unsigned long bits = encoded_bits(root, 0);
+	printf("Original:   %lu bytes (%lu bits)\n", total, total * 8);
+	printf("Compressed: %lu bits = %lu bytes (data only, no header)\n", bits, (bits + 7) / 8);
+
+	free_tree(root);
 	return 0;
 }
 
@@ -120,7 +122,7 @@ Node* heap_extract_min(Node **arr, int *size) {
 	}
 
 	Node *root = arr[0];
-	arr[0] = arr[*size - 1];   // last element is at size - 1
+	arr[0] = arr[*size - 1];
 	*size -= 1;
 	sift_down(arr, *size, 0);
 
@@ -150,28 +152,68 @@ Node* create_node(unsigned char byte, unsigned long frequency, Node* left, Node*
 }
 
 Node* build_tree(unsigned long *freq) {
-	Node** heap = malloc(HEAP_CAPACITY * sizeof(Node*));
+	Node* heap[HEAP_CAPACITY];
 	int size = 0;
+
 	for (int i = 0; i < 256; i++) {
 		if (freq[i] > 0) {
 			heap_insert(heap, &size, create_node(i, freq[i], NULL, NULL));
-			size += 1;
 		}
 	}
-	
+
 	if (size == 0) {
-		free(heap);
 		return NULL;
 	}
-	
+
 	while (size > 1) {
 		Node* leftNode = heap_extract_min(heap, &size);
 		Node* rightNode = heap_extract_min(heap, &size);
 		heap_insert(heap, &size, create_node(0, leftNode->frequency + rightNode->frequency, leftNode, rightNode));
-		size -= 2;
 	}
 
 	Node* root = heap_extract_min(heap, &size);
-	free(heap);
 	return root;
+}
+
+// Prints every leaf with its frequency and depth (= code length in bits)
+void print_tree(Node *node, int depth) {
+	if (node == NULL) {
+		return;
+	}
+
+	if (node->leftChild == NULL) {   // leaf
+		if (isprint(node->byte)) {
+			printf("%3d '%c': freq %lu, depth %d\n", node->byte, node->byte, node->frequency, depth);
+		} else {
+			printf("%3d    : freq %lu, depth %d\n", node->byte, node->frequency, depth);
+		}
+		return;
+	}
+
+	print_tree(node->leftChild, depth + 1);
+	print_tree(node->rightChild, depth + 1);
+}
+
+// Sum of frequency * depth over all leaves = size of the encoded data in bits
+unsigned long encoded_bits(Node *node, int depth) {
+	if (node == NULL) {
+		return 0;
+	}
+
+	if (node->leftChild == NULL) {   // leaf
+		return node->frequency * depth;
+	}
+
+	return encoded_bits(node->leftChild, depth + 1) + encoded_bits(node->rightChild, depth + 1);
+}
+
+// Frees children before the node itself (post-order)
+void free_tree(Node *node) {
+	if (node == NULL) {
+		return;
+	}
+
+	free_tree(node->leftChild);
+	free_tree(node->rightChild);
+	free(node);
 }
