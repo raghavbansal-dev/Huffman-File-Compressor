@@ -2,8 +2,6 @@
 
 mzip is a command-line file compressor I wrote in C. It uses Huffman coding, works on any kind of file (text, images, executables, whatever), and decompressing gives you back the exact original, byte for byte.
 
-It's my first real C project, from first year of BTech CSE. When I started I'd only learned up to functions and arrays, so structs, pointers, dynamic memory and file I/O were all learned while building this.
-
 ```
 $ ./mzip c pride_and_prejudice.txt book.huf
 Original:   717602 bytes
