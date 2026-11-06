@@ -1,3 +1,8 @@
-*.txt
+# Build outputs
+mzip
+mzip-debug
+*.o
+
+# Compressed files and test leftovers
 *.huf
-/mzip
+*.out
