@@ -23,6 +23,13 @@ typedef struct BitWriter {
 	int count;
 } BitWriter;
 
+// The reverse: loads a byte and hands its bits out one at a time, leftmost first
+typedef struct BitReader {
+	FILE *fp;
+	unsigned char buffer;
+	int count;   // bits left in buffer
+} BitReader;
+
 void swap(Node **a, Node **b);
 void sift_up(Node **arr, int index);
 void sift_down(Node **arr, int size, int index);
@@ -40,10 +47,14 @@ void write_bit(BitWriter *bw, int bit);
 void flush_bits(BitWriter *bw);
 void write_code(BitWriter *bw, const char *code);
 int write_header(FILE *output, unsigned long *freq);
+int read_header(FILE *input, unsigned long *freq);
+int read_bit(BitReader *br);
+int compress(const char *inPath, const char *outPath);
+int decompress(const char *inPath, const char *outPath);
 
 int main(int argc, char *argv[]) {
-	if (argc != 4 || strcmp(argv[1], "c") != 0) {
-		fprintf(stderr, "Usage: %s c <input file> <output file>\n", argv[0]);
+	if (argc != 4 || (strcmp(argv[1], "c") != 0 && strcmp(argv[1], "d") != 0)) {
+		fprintf(stderr, "Usage: %s c|d <input file> <output file>\n", argv[0]);
 		return 1;
 	}
 
@@ -53,13 +64,21 @@ int main(int argc, char *argv[]) {
 		return 1;
 	}
 
+	if (strcmp(argv[1], "c") == 0) {
+		return compress(argv[2], argv[3]);
+	}
+	return decompress(argv[2], argv[3]);
+}
+
+// Returns 0 on success, 1 on failure, so main can pass it straight through as the exit code
+int compress(const char *inPath, const char *outPath) {
 	// One counter per possible byte value
 	unsigned long freq[256] = {0};
 
 	// "rb" so nothing gets messed with on the way in, works for any file type
-	FILE *fptr = fopen(argv[2], "rb");
+	FILE *fptr = fopen(inPath, "rb");
 	if (fptr == NULL) {
-		perror(argv[2]);
+		perror(inPath);
 		return 1;
 	}
 
@@ -90,9 +109,9 @@ int main(int argc, char *argv[]) {
 		}
 	}
 
-	FILE *optr = fopen(argv[3], "wb");
+	FILE *optr = fopen(outPath, "wb");
 	if (optr == NULL) {
-		perror(argv[3]);
+		perror(outPath);
 		fclose(fptr);
 		free_tree(root);
 		return 1;
@@ -100,7 +119,7 @@ int main(int argc, char *argv[]) {
 
 	// The decompressor needs the frequencies to rebuild the same tree
 	if (!write_header(optr, freq)) {
-		fprintf(stderr, "Error: failed to write header to %s\n", argv[3]);
+		fprintf(stderr, "Error: failed to write header to %s\n", outPath);
 		fclose(optr);
 		fclose(fptr);
 		free_tree(root);
@@ -129,6 +148,78 @@ int main(int argc, char *argv[]) {
 		printf(" (%.1f%% of original)", 100.0 * compressedSize / total);
 	}
 	printf("\n");
+
+	return 0;
+}
+
+// Same return convention as compress
+int decompress(const char *inPath, const char *outPath) {
+	FILE *fptr = fopen(inPath, "rb");
+	if (fptr == NULL) {
+		perror(inPath);
+		return 1;
+	}
+
+	// Get the frequencies back so we can build the exact same tree
+	unsigned long freq[256] = {0};
+	if (!read_header(fptr, freq)) {
+		fprintf(stderr, "Error: %s is not a valid .huf file\n", inPath);
+		fclose(fptr);
+		return 1;
+	}
+
+	// The original size is just all the counts added up.
+	// This is how we know when to stop and ignore the padding bits.
+	unsigned long total = 0;
+	for (int i = 0; i < 256; i++) {
+		total += freq[i];
+	}
+
+	Node *root = build_tree(freq);
+
+	FILE *optr = fopen(outPath, "wb");
+	if (optr == NULL) {
+		perror(outPath);
+		fclose(fptr);
+		free_tree(root);
+		return 1;
+	}
+
+	// read_header left us right where the data starts
+	BitReader br = {fptr, 0, 0};
+
+	// One loop = one byte of the original file.
+	// Empty file: total is 0, so we never touch the NULL root.
+	for (unsigned long written = 0; written < total; written++) {
+		Node *node = root;
+
+		// Walk down until we hit a leaf: 0 goes left, 1 goes right.
+		// With a single-symbol file the root is already a leaf, so this
+		// never runs and we just write that byte total times.
+		while (node->leftChild != NULL) {
+			int bit = read_bit(&br);
+			if (bit == -1) {
+				fprintf(stderr, "Error: %s is truncated or corrupt\n", inPath);
+				fclose(optr);
+				remove(outPath);   // don't leave a half-written file lying around
+				fclose(fptr);
+				free_tree(root);
+				return 1;
+			}
+			node = (bit == 0) ? node->leftChild : node->rightChild;
+		}
+
+		fputc(node->byte, optr);
+	}
+
+	long compressedSize = ftell(fptr);
+
+	fclose(optr);
+	fclose(fptr);
+	free_tree(root);
+
+	printf("Compressed:   %ld bytes\n", compressedSize);
+	printf("Decompressed: %lu bytes\n", total);
 
 	return 0;
 }
@@ -405,4 +496,55 @@ int write_header(FILE *output, unsigned long *freq) {
 		}
 	}
 	return 1;
+}
+
+// Mirror of write_header. Fills freq (caller zeroes it) and returns 1 on success,
+// 0 if the file ends early or contains something the compressor would never write.
+int read_header(FILE *input, unsigned long *freq) {
+	uint16_t count;
+	if (fread(&count, sizeof(uint16_t), 1, input) != 1) {
+		return 0;
+	}
+
+	// There are only 256 possible bytes, anything more means this isn't our file
+	if (count > 256) {
+		return 0;
+	}
+
+	for (int i = 0; i < count; i++) {
+		unsigned char byte;
+		uint64_t frequency;
+		if (fread(&byte, sizeof(unsigned char), 1, input) != 1 ||
+		    fread(&frequency, sizeof(uint64_t), 1, input) != 1) {
+			return 0;
+		}
+
+		// The compressor never writes a zero count or the same byte twice
+		if (frequency == 0 || freq[byte] != 0) {
+			return 0;
+		}
+
+		freq[byte] = frequency;
+	}
+	return 1;
+}
+
+// Returns the next bit (0 or 1), or -1 if the file has run out
+int read_bit(BitReader *br) {
+	// Used up the current byte, grab the next one
+	if (br->count == 0) {
+		int c = fgetc(br->fp);
+		if (c == EOF) {
+			return -1;
+		}
+		br->buffer = c;
+		br->count = 8;
+	}
+
+	// Bits were written leftmost first, so read them back the same way:
+	// take the top bit, then shift the next one up into its place
+	int bit = (br->buffer >> 7) & 1;
+	br->buffer <<= 1;
+	br->count -= 1;
+	return bit;
 }
