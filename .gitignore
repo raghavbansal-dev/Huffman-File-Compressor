@@ -6,3 +6,6 @@ mzip-debug
 # Compressed files and test leftovers
 *.huf
 *.out
+
+# test files
+*.txt
